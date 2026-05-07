@@ -298,25 +298,63 @@ assets/                     # logo
 
 ## Reproducing results
 
-Pre-collected trajectories are hosted on HuggingFace. You can reproduce the paper's results without re-running any evaluations — only the probe-question measurement step requires API calls.
+Every artefact in the paper — trajectories, measure-stage `.eval` logs,
+and the per-figure CSVs — is shipped together as a single Croissant-
+annotated HuggingFace dataset. Configs live alongside the data in each
+folder, so you can rerun any stage without consulting the codebase tree.
 
-### Quick start
+### Folder map (HuggingFace dataset)
+
+| Folder | Contents | YAML config |
+|---|---|---|
+| `collected_trajectories/` | Per-model trajectory JSONs (`<model>/all.json` and per-source files), shared deployment chats under `deployment_categories/`, chat-eval prompts under `non_inspect_chat_evals/`. | `collected_trajectories/eval_suite.yaml` (broad benchmark sweep) and `collected_trajectories/agentic_misalignment.yaml` (focused 20-condition agentic-misalignment collection). |
+| `measure_logs/` | 12 `inspect_ai` `.eval` logs (one per judge model), `scores.csv` (canonical per-(transcript × probe × judge) table), and the run config. | `measure_logs/config.yaml` |
+| `paper_replication/` | Scored CSVs that feed the paper figures and ANOVA tables. End-of-pipeline outputs; no runnable config. | — |
+
+### 1. Download
 
 ```bash
-# 1. Download pre-collected trajectories
-huggingface-cli download antieval/repro --repo-type dataset --local-dir data/repro
+# Entire dataset (~1.9 GB):
+huggingface-cli download el7982/aware-bench --repo-type dataset \
+    --local-dir data/repro
 
-# 2. Run measurement on downloaded data
-python run.py --config configs/reproduce.yaml
+# Or just the trajectories (~370 MB) — sufficient to re-run the measure stage:
+huggingface-cli download el7982/aware-bench --repo-type dataset \
+    --include "collected_trajectories/*" --local-dir data/repro
 ```
 
-### Using the cache import tool
+### 2. Re-run any stage
 
-Alternatively, import trajectories directly into the pipeline cache (skips collection entirely on subsequent runs):
+The configs in the dataset use paths relative to the working directory,
+defaulting to `data/repro/...`. Run from the parent of `data/`:
 
 ```bash
-uv run tools/cache/cache_import.py --repo antieval/repro --experiment eval_collection
-python run.py --config configs/eval_ext_inspect.yaml --skip-collect
+# (a') Optional:Collect a fresh trajectory pool from upstream benchmarks
+uv run run.py --config data/repro/collected_trajectories/eval_suite.yaml \
+    --skip-measure --skip-analyze
+
+# (a'') Optional collection: 20-condition agentic-misalignment sweep
+uv run run.py --config data/repro/collected_trajectories/agentic_misalignment.yaml \
+    --skip-measure --skip-analyze
+
+# (b) Measure: probe the 12 judge models on the trajectory pool
+uv run run.py --config data/repro/measure_logs/config.yaml \
+    --skip-collect --skip-analyze
+```
+
+`--skip-collect` reuses the on-disk trajectories; `--skip-measure` /
+`--skip-analyze` skip downstream stages. Edit `runs:` in any config to
+restrict which generator/judge models are scored.
+
+### 3. Consume the scored data directly
+
+If you don't want to rerun anything, the structured score tables in
+`paper_replication/*.csv` and `measure_logs/scores.csv` are loadable via
+`pandas.read_csv` or HuggingFace `datasets`:
+
+```python
+from datasets import load_dataset
+ds = load_dataset("el7982/aware-bench", "scores", split="train")
 ```
 
 ### Exporting your own runs
